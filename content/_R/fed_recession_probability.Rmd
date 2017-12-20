@@ -1,0 +1,131 @@
+---
+title: Federal Reserve Recession Predictions are Worse than Using the Long-Run Average
+author: Michael Toth
+date: 2017-06-09
+category: R
+tags: R, Politics, Donald Trump
+summary: A visualization of historical Presidential approval ratings from Harry Truman through Donald Trump
+output: html_document
+status: draft
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=8, echo=FALSE, warning=FALSE, message=FALSE, error=FALSE)
+```
+
+```{r load packages}
+library(dplyr)
+library(ggplot2)
+library(hrbrthemes)
+library(kimisc) # devtools::install_github("krlmlr/kimisc")
+library(xtable)
+library(xlsx)
+```
+
+```{r setup, cache=T}
+url <- 'https://www.newyorkfed.org/medialibrary/media/research/capital_markets/allmonth.xls'
+fileloc <- '~/Downloads/allmonth.xls'
+
+download.file(url = 'https://www.newyorkfed.org/medialibrary/media/research/capital_markets/allmonth.xls', destfile = fileloc)
+
+data <- read.xlsx(fileloc, sheetIndex = 1, colIndex = c(1, 6, 7))
+colnames(data) <- c('Date', 'Recession_Prob', 'NBER_Recession_Ind')
+
+# Remove rows before 1960 (no predictions) and after current date (no recession indicator)
+data <- filter(data, Date >= '1960-01-31', Date <= Sys.Date())
+
+# Determine whether a recession actually occurs 12 months forward
+data <- data %>% mutate(NBER_Recession_Ind_12M = lead(NBER_Recession_Ind, 12))
+
+# Get recessions in better form for plotting 
+recessions <- mutate(data, Status = ifelse(NBER_Recession_Ind == 1 & lag(NBER_Recession_Ind == 0), 'Start', ifelse(NBER_Recession_Ind == 0 & lag(NBER_Recession_Ind == 1), 'Finish', ''))) %>%
+              filter(Status %in% c('Start', 'Finish')) %>%
+              select(Date, Status)
+
+recessions$ID <- rep(1:(length(recessions$Date)/2), each = 2)
+
+recessions <- tidyr::spread(recessions, key = Status, value = Date)
+
+# Probability of recession baseline
+base_recession_prob <- sum(data$NBER_Recession_Ind) / length(data$NBER_Recession_Ind)
+
+```
+
+I was reading an article recently that referred to the Federal Reserve's Recession Probability Indicator, which I'd never heard of before. I was intrigued enough to look into it, and it turns out it's a monthly statistic [published on the New York Fed's website](https://www.newyorkfed.org/research/capital_markets/ycfaq.html) that aims to predict the probability that the economy will be in a recession 12 months in the future. 
+
+The first thing I noticed was that as of April 30, 2017, they were predicting the probability of recession in 12 months to be 6.3%. To me, this number seemed low, so I decided to look at their raw data and make some calculations. First, I looked at the long-run average, and I found that since 1960, the U.S. has been in a recession `r round(base_recession_prob * 100, 1)`% of the time. This was enough to convince me a deeper analysis of these predictions was warranted. First though, let's take a look at what I'm talking about. Graphically, the prediction statistic looks like this:
+
+```{r forecast_graph}
+
+ggplot(data) +
+  geom_line(aes(x = Date, y = Recession_Prob)) +
+  geom_rect(data=recessions, aes(xmin = Start, xmax = Finish, ymin = -Inf, ymax = Inf), fill = 'blue', alpha = 0.2) +
+  scale_y_continuous(labels = scales::percent, breaks = seq(0, 1, length.out = 11)) +
+  scale_x_date(date_breaks = "1 years", date_labels = '%Y', expand = c(.01, 0)) +
+  theme_ipsum(grid='XY') +
+  theme(axis.text.x = element_text(angle=90)) +
+  labs(y = 'Predicted Recession Probability',
+       title = 'Predicted Recession Probabilities',
+       subtitle = 'NBER Recessions Overlaid',
+       caption='michaeltoth.me')
+```
+
+The x-axis represents the date, covering monthly periods from 1960 through April 2017. The y-axis shows the predicted probability of recession. I've also added vertical bars that show the time periods classified as recessions by the [National Bureau of Economic Research](http://www.nber.org/), which was the measure this statistic was built to predict. 
+
+A quick visual inspection identifies several issues with the predictions. In the highlighted period, there are a total of 8 identified recessions. Of these, 4 of them occurred when the stated probability of recession was quite low:
+
+* The 1960-1961 recession was preceded by probabilities of approximately 10%
+* The 1974 recession was preceded by probabilities of approximately 2% - 5%
+* The 1981 recession was preceded by probabilities of approximately 5%. This is one of the stranger ones--In March 1981, the probability of recession was forecasted at 94%, but by June this number had fallen to just under 2%. The recession then did hit 2 months later, in July, and lasted over a year. 
+* The 2001 recession was preceded by probabilities of 10% - 15%
+
+In all of these cases, the prediction statistic does increase once the recession has begun, but that's of no use as a forecasting tool. It's certainly troubling that this method was seemingly unable to identify four of the eight recessions in this period, but it's important to note that that's not technically what they're testing for here. What's really important is that their probabilities match reality. That is, if they predict a recession will occur with 10% probability, they're not necessarily incorrect when a recession does occur. In fact, with a good prediction model we should expect such a result 10% of the time. 
+
+So now let's get into this. When the Federal Reserve predicts there is an n% chance of a recession, how often does a recession actually occur 12 months later? Under a perfect model, we'd expect recessions to occur exactly n% of the time.
+
+```{r core-analysis, results='asis'}
+
+# Create 8 break points by quantiles
+quantbreaks <- quantile(data$Recession_Prob, probs = seq(0, 1, 0.125))
+#data$Recession_Prob_Cuts <- Hmisc::cut2(data$Recession_Prob, cuts = quantbreaks)
+data$Recession_Prob_Cuts <- cut_format(data$Recession_Prob, breaks = quantbreaks, format_fun = scales::percent)
+data$Recession_Prob_Mean <- as.numeric(as.character((Hmisc::cut2(data$Recession_Prob, cuts = quantbreaks, levels.mean = T))))
+
+probs <- data %>% filter(!is.na(NBER_Recession_Ind_12M), !is.na(Recession_Prob_Cuts)) %>% group_by(Recession_Prob_Cuts) %>% summarise(Recession_Prob_Mean = min(Recession_Prob_Mean), count = n(), Historical_Prob = sum(NBER_Recession_Ind_12M / n()))
+
+textlabel <- data.frame(label = 'If predictions were accurate,\n all points would fall on this line')
+
+ggplot(probs) +
+  geom_point(aes(x = Recession_Prob_Mean, y = Historical_Prob)) +
+  geom_segment(aes(x = 0, y = 0, xend = 0.5, yend = 0.5), linetype = 'dashed', size = 0.1, color = 'grey') +
+  geom_label(data=textlabel, aes(x=0.3, y=0.4, label=label)) +
+  scale_x_continuous(limits = c(0, 0.5), labels = scales::percent, expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 0.5), labels = scales::percent, expand = c(0, 0)) +
+  theme_ipsum(grid='XY') +
+  theme(axis.text.x = element_text(angle=90)) +
+  labs(y = 'Actual (Historical) Recession Probability',
+       x = 'Federal Reserve Predicted Recession Probabilities',
+       title = 'Historical vs. Fed Predicted Recession Probabilities',
+       subtitle = 'Predictions <10% Understate the Probability of Recession; Predictions >15% Overstate the Probability',
+       caption='michaeltoth.me')
+```
+
+For this graph I've grouped the Fed Predictions into 8 separate bands by quantile, each containing approximately the same number of predictions (78 at the lowest, 86 at the greatest). For each of these bands, I've calculated the average prediction by the Fed and the actual historical probability associated with those predictions, and I've added it to the plot.
+
+```{r mse_analysis}
+get_mse <- function(pred, actual) {
+  squared_errors <- (pred - actual)^2
+  mse <- mean(squared_errors)
+  mse
+}
+
+# Remove last 12M where future prediction is unknown
+complete <- filter(data, !is.na(NBER_Recession_Ind_12M))
+get_mse(complete$Recession_Prob, complete$NBER_Recession_Ind_12M)
+
+get_mse(base_recession_prob, complete$NBER_Recession_Ind_12M)
+```
+
+To their credit, I don't believe the Fed is deliberately trying to mislead here. In fact, they have a detailed Q&A section on this page that details this methodology, its shortcomings, and further findings. But that's not sufficient. The real problem here is the insidious side effects that come from this type of forecast. Academics with no skin in the game make forecasts about the macroeconomy. The forecasts are published by the Federal Reserve, and they bring with them the authority of that organization. Then retail (and in many cases institutional) investors make real-money investments based on these forecasts, and they are the ones who suffer the consequences of the poor forecasting. The academics who make the forecasts are never held accountable for their poor forecasting ability, and the forecasts are treated as if they are the 
+
+People who do not have skin in the game should not make forecasts. It is well established that forecasts in the economic sphere are of essentially 0 utility.

@@ -1,0 +1,86 @@
+---
+title: Historical Presidential Approval Ratings
+author: Michael Toth
+date: 2017-06-09
+category: R
+tags: R, Politics, Donald Trump
+summary: A visualization of historical Presidential approval ratings from Harry Truman through Donald Trump
+output: html_document
+status: draft
+---
+
+Data for this post comes from http://www.presidency.ucsb.edu/data/popularity.php?pres=33&sort=time&direct=DESC&Submit=DISPLAY
+
+
+```{r setup}
+library(animation)
+library(dplyr)
+library(gganimate)
+library(ggplot2)
+library(hrbrthemes)
+library(lubridate)
+
+# Function to convert 2-digit years
+get_year <- function(x, cutoff_year=1944){
+  x <- mdy(x)
+  m <- year(x) %% 100
+  year(x) <- ifelse(m > cutoff_year %% 100, 1900+m, 2000+m)
+  x
+}
+
+approval <- read.csv('~/dev/michaeltoth/content/_resources/presidentialapproval.csv')
+approval$Start <- get_year(approval$Start)
+approval$End <- get_year(approval$End)
+approval$Quarter <- floor_date(approval$End, unit = 'quarter')
+approval <- approval %>% group_by(President) %>% mutate(First = min(End))
+approval <- approval %>% mutate(Time = as.numeric(End - First) / 365.25)
+```
+
+
+```{r graph}
+ggplot(approval) +
+  geom_line(aes(x = Time, y = Approval, color = President)) +
+  scale_y_continuous(name = 'Approval Rating', limits = c(0, 100)) +
+  scale_x_continuous(name = 'Years in Office', limits = c(0, 8), breaks = seq(0, 8, 1)) +
+  theme_ipsum(grid='XY')
+  #labs(y = 'Approval Rating',
+  #     title = 'Presidential Approval Ratings',
+  #     caption='michaeltoth.me')
+```
+
+
+```{r testing}
+presidents <- unique(approval$President)
+
+saveGIF(
+{
+    for (pres in presidents) {
+        current <- filter(approval, President == pres)
+        cutoff <- head(current$First, n = 1)
+        
+        current_quarters <- unique(current$Quarter)
+        
+        for (quarter in current_quarters) {
+            g <- ggplot() +
+                geom_line(data = filter(approval, End < cutoff), aes(x = Time, y = Approval, group = President), color = 'grey', alpha = 0.5) +
+                geom_line(data = filter(approval, President == pres, End <= quarter), aes(x = Time, y = Approval), color = 'navy') +
+                scale_y_continuous(name = 'Approval Rating', limits = c(0, 100)) +
+                scale_x_continuous(name = 'Years in Office', limits = c(0, 8), breaks = seq(0, 8, 1)) +
+                theme_ipsum(grid='XY') +
+                labs(title = 'Presidential Approval Ratings',
+                     subtitle = pres,
+                     caption = 'Source: michaeltoth.me @michael_toth')
+            print(g)
+            ani.pause()
+            print(paste(pres, as.Date(quarter, origin = '1970-01-01')))
+        }
+        ani.pause(interval = 1)
+    }
+}, 
+interval = 0.2,
+loop = 0,
+movie.name = 'pres.gif',
+ani.width = 600, 
+ani.height = 600
+)
+```
