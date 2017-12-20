@@ -59,5 +59,4 @@ target/
 
 venv
 output/
-output
 *.pid
